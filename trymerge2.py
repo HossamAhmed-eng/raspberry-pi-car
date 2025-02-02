@@ -39,6 +39,11 @@ pwm_a, pwm_b, pwm_a2, pwm_b2 = [GPIO.PWM(pin, 1000) for pin in [ENA, ENB, ENA2, 
 for pwm in [pwm_a, pwm_b, pwm_a2, pwm_b2]:
     pwm.start(100)
 
+tilt_up_count = 0
+tilt_down_count = 0
+pan_left_count = 0
+pan_right_count = 0
+
 def motors_forward():
     GPIO.output([IN1, IN3, IN5, IN7], GPIO.HIGH)
     GPIO.output([IN2, IN4, IN6, IN8], GPIO.LOW)
@@ -90,6 +95,7 @@ class StreamingOutput(io.BufferedIOBase):
 
 class RequestHandler(server.BaseHTTPRequestHandler):
     def do_GET(self):
+        global pan_left_count, pan_right_count , tilt_up_count , tilt_down_count
         if self.path == '/':
             self.send_response(301)
             self.send_header('Location', '/index.html')
@@ -119,15 +125,55 @@ class RequestHandler(server.BaseHTTPRequestHandler):
                 pass
         elif self.path.startswith('/?command='):
             command = self.path.split('=')[-1]
-            if command == 'forward': motors_forward()
-            elif command == 'backward': motors_backward()
-            elif command == 'stop': motors_stop()
+            if command == 'forward': 
+                motors_forward()
+            elif command == 'backward': 
+                motors_backward()
+            elif command == 'stop': 
+                motors_stop()
             elif 'speed' in command:
                 set_speed(int(self.path.split('value=')[-1]))
-            elif command == 'pan_left': move_servo(servo_pan, 70)
-            elif command == 'pan_right': move_servo(servo_pan, 95)
-            elif command == 'tilt_up': move_servo(servo_tilt, 50)
-            elif command == 'tilt_down': move_servo(servo_tilt, 115)
+            elif command == 'pan_left' and pan_left_count < 2: 
+                move_servo(servo_pan, 70)
+                pan_left_count += 1
+            elif command == 'pan_right' and pan_right_count < 2: 
+                move_servo(servo_pan, 95)
+                pan_right_count += 1
+            elif command == 'tilt_up' and tilt_up_count < 3: 
+                move_servo(servo_tilt, 45)
+                tilt_up_count += 1
+            elif command == 'tilt_down' and tilt_down_count < 3: 
+                move_servo(servo_tilt, 120)
+                tilt_down_count += 1
+	    # If tilt up count is 3 , disable tilt up until tilt down is pressed
+            if tilt_up_count == 3 and command == 'tilt_up':
+                self.send_response(403)
+                self.end_headers()
+	    # if tilt down count is 3 , disable tilt down until tilt up is pressed
+            if tilt_down_count == 3 and command == 'tilt_down':
+                self.send_response(403)
+                self.end_headers()
+            # If pan left count is 2, disable pan left until pan right is pressed
+            if pan_left_count == 2 and command == 'pan_left':
+                self.send_response(403)  # Forbidden
+                self.end_headers()
+
+            # If pan right count is 2, disable pan right until pan left is pressed
+            if pan_right_count == 2 and command == 'pan_right':
+                self.send_response(403)  # Forbidden
+                self.end_headers()
+            if command == 'tilt_up' and tilt_down_count == 3 or command == 'tilt_up' and tilt_down_count == 2 or command == 'tilt_up' and tilt_down_count == 1:
+                tilt_down_count -= 1
+            if command == 'tilt_down' and tilt_up_count == 3 or command == 'tilt_down' and tilt_up_count == 2 or command == 'tilt_down' and tilt_up_count == 1:
+                tilt_up_count -= 1
+            # Decrease pan_left_count by 1 when pan_right is pressed
+            if command == 'pan_right' and pan_left_count == 2 or command == 'pan_right' and pan_left_count == 1:
+                pan_left_count -= 1
+
+            # Decrease pan_right_count by 1 when pan_left is pressed
+            if command == 'pan_left' and pan_right_count == 2 or command == 'pan_left' and pan_right_count == 1:
+                pan_right_count -= 1
+
             self.send_response(200)
             self.end_headers()
 
@@ -157,4 +203,3 @@ finally:
     servo_pan.stop()
     servo_tilt.stop()
     GPIO.cleanup()
-
