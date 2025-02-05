@@ -9,51 +9,87 @@ from picamera2 import Picamera2
 from picamera2.encoders import JpegEncoder
 from picamera2.outputs import FileOutput
 import time
+import Adafruit_DHT
 
 # GPIO motor drivers
 # driver 1
 IN1, IN2, ENA = 17, 18, 22
 IN3, IN4, ENB = 23, 24, 25
-# driver 2
-IN5, IN6, ENA2 = 5, 6, 12
-IN7, IN8, ENB2 = 13, 19, 26
 # Servo Motors
 SERVO_PAN, SERVO_TILT = 20, 21
-
+RELAY_PUMP = 27
+RELAY_BUZZER = 16
+RELAY_LIGHT = 26
+# DHT Sensor
+DHT_SENSOR = Adafruit_DHT.DHT22
+DHT_PIN = 7
 GPIO.setmode(GPIO.BCM)
-
+#soil moist
+SOIL_MOIST = 4
 # Setup for motors
-for pin in [IN1, IN2, ENA, IN3, IN4, ENB, IN5, IN6, ENA2, IN7, IN8, ENB2]:
+for pin in [IN1, IN2, ENA, IN3, IN4, ENB]:
     GPIO.setup(pin, GPIO.OUT)
 
+for pin in [RELAY_PUMP, RELAY_BUZZER, RELAY_LIGHT]:
+    GPIO.setup(pin, GPIO.OUT)
+    GPIO.output(pin, GPIO.LOW)
 # Setup for servos
+SERVO_UP1, SERVO_UP2 = 5, 6  # Change pins if needed
+
+GPIO.setup(SERVO_UP1, GPIO.OUT)
+GPIO.setup(SERVO_UP2, GPIO.OUT)
+
+servo_up1 = GPIO.PWM(SERVO_UP1, 50)  # 50Hz for standard servos
+servo_up2 = GPIO.PWM(SERVO_UP2, 50)
+
+servo_up1.start(0)
+servo_up2.start(0)
 GPIO.setup(SERVO_PAN, GPIO.OUT)
 GPIO.setup(SERVO_TILT, GPIO.OUT)
 servo_pan = GPIO.PWM(SERVO_PAN, 50)
 servo_tilt = GPIO.PWM(SERVO_TILT, 50)
 servo_pan.start(0)
 servo_tilt.start(0)
-
+GPIO.setup(SOIL_MOIST, GPIO.IN)
 # PWM setup for motor speed control (might not be working idk)
-pwm_a, pwm_b, pwm_a2, pwm_b2 = [GPIO.PWM(pin, 1000) for pin in [ENA, ENB, ENA2, ENB2]]
-for pwm in [pwm_a, pwm_b, pwm_a2, pwm_b2]:
+pwm_a, pwm_b= [GPIO.PWM(pin, 1000) for pin in [ENA, ENB]]
+for pwm in [pwm_a, pwm_b]:
     pwm.start(100)
 
 tilt_up_count = 0
 tilt_down_count = 0
 pan_left_count = 0
 pan_right_count = 0
+def read_dht_sensor():
+    humidity, temperature = Adafruit_DHT.read(DHT_SENSOR, DHT_PIN)
+    if humidity is not None and temperature is not None:
+        return temperature, humidity
+    else:
+        return None, None
 
+# Read digital soil moisture sensor (returns "Moist" or "Dry")
+def read_soil_moisture_digital():
+    return "Dry" if GPIO.input(SOIL_MOIST) else "Moist"
+
+def motors_left():
+    pwm_a.ChangeDutyCycle(50)  # Reduce left motor speed
+    pwm_b.ChangeDutyCycle(100)
+def motors_right():
+    pwm_a.ChangeDutyCycle(100)  # Keep left motor at full speed
+    pwm_b.ChangeDutyCycle(50)  # Red
 def motors_forward():
-    GPIO.output([IN1, IN3, IN5, IN7], GPIO.HIGH)
-    GPIO.output([IN2, IN4, IN6, IN8], GPIO.LOW)
+    pwm_a.ChangeDutyCycle(100)
+    pwm_b.ChangeDutyCycle(100)
+    GPIO.output([IN1, IN3], GPIO.HIGH)
+    GPIO.output([IN2, IN4], GPIO.LOW)
 
 def motors_backward():
-    GPIO.output([IN1, IN3, IN5, IN7], GPIO.LOW)
-    GPIO.output([IN2, IN4, IN6, IN8], GPIO.HIGH)
-
+    GPIO.output([IN1, IN3], GPIO.LOW)
+    GPIO.output([IN2, IN4], GPIO.HIGH)
+    pwm_a.ChangeDutyCycle(0)
+    pwm_b.ChangeDutyCycle(0)
 def motors_stop():
-    GPIO.output([IN1, IN2, IN3, IN4, IN5, IN6, IN7, IN8], GPIO.LOW)
+    GPIO.output([IN1, IN2, IN3, IN4], GPIO.LOW)
 
 def set_speed(duty_cycle):
     for pwm in [pwm_a, pwm_b, pwm_a2, pwm_b2]:
@@ -66,22 +102,264 @@ def move_servo(servo, angle):
     servo.ChangeDutyCycle(0)
 
 PAGE = """
-<html>
-<head><title>Car Control</title></head>
+<!DOCTYPE html>
+<html lang="en">
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Car Control</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            background-color: #f4f4f4;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            margin: 0;
+        }
+        .container {
+            text-align: center;
+            background-color: #fff;
+            padding: 20px;
+            border-radius: 10px;
+            box-shadow: 0 0 10px rgba(0, 0, 0, 0.1);
+            width: 90%;
+            max-width: 800px;
+        }
+        h1 {
+            margin-bottom: 20px;
+            color: #333;
+        }
+        .video-stream {
+            margin-bottom: 20px;
+        }
+        .video-stream img {
+            max-width: 100%;
+            border-radius: 5px;
+        }
+        .control-panel {
+            display: grid;
+            grid-template-areas:
+                ". forward ."
+                "left stop right"
+                ". backward .";
+            gap: 10px;
+            margin-bottom: 20px;
+        }
+        .control-button {
+            padding: 10px 25px;
+            font-size: 18px;
+            border: none;
+            border-radius: 10px;
+            cursor: pointer;
+            background-color: #007bff;
+            color: white;
+            transition: background-color 0.3s;
+        }
+        .control-button:active {
+            background-color: #0056b3;
+        }
+        .control-button#forward { grid-area: forward; }
+        .control-button#backward { grid-area: backward; }
+        .control-button#left { grid-area: left; }
+        .control-button#right { grid-area: right; }
+        .control-button#stop { grid-area: stop; background-color: #dc3545; }
+        .control-button#stop:active { background-color: #a71d2a; }
+        .servo-control {
+            margin-bottom: 20px;
+        }
+        .servo-control button {
+            padding: 10px 20px;
+            font-size: 16px;
+            border-radius: 5px;
+            margin: 5px;
+        }
+        .status-button {
+            padding: 10px 20px;
+            font-size: 16px;
+            border-radius: 5px;
+            margin: 5px;
+            cursor: pointer;
+        }
+        .status-button.on {
+            background-color: #28a745;
+            color: white;
+        }
+        .status-button.off {
+            background-color: #dc3545;
+            color: white;
+        }
+        .status-button:active {
+            opacity: 0.8;
+        }
+        .sensor-data {
+            margin-top: 20px;
+            font-size: 18px;
+            background-color: #f1f1f1;
+            padding: 10px;
+            border-radius: 5px;
+            display: inline-block;
+            width: 50%;
+            text-align: left;
+        }
+    </style>
+
+ <script>
+        // Toggle status for pump, buzzer, and light
+        function toggleStatus(device) {
+            const button = document.getElementById(device);
+            let command = '';
+
+            if (button.classList.contains('off')) {
+                command = device + '_on';
+                button.classList.remove('off');
+                button.classList.add('on');
+                button.innerText = device.charAt(0).toUpperCase() + device.slice(1) + ' ON';
+            } else {
+                command = device + '_off';
+                button.classList.remove('on');
+                button.classList.add('off');
+                button.innerText = device.charAt(0).toUpperCase() + device.slice(1) + ' OFF';
+            }
+
+            // Send the command to the server
+            fetch('/?command=' + command)
+                .then(response => response.text())
+                .then(data => {
+                    console.log(data);
+                });
+        }
+
+    </script>
+
+</head>
 <body>
-<h1>Motor & Camera Control</h1>
-<img src="/stream.mjpg" width="640" height="480" />
-<button onclick="fetch('/?command=forward')">Forward</button>
-<button onclick="fetch('/?command=backward')">Backward</button>
-<button onclick="fetch('/?command=stop')">Stop</button>
-<input type="range" min="0" max="100" value="100" id="speed" onchange="fetch('/?command=speed&value=' + this.value)"> Speed
-<br>
-<button onclick="fetch('/?command=pan_left')">Pan Left</button>
-<button onclick="fetch('/?command=pan_right')">Pan Right</button>
-<button onclick="fetch('/?command=tilt_up')">Tilt Up</button>
-<button onclick="fetch('/?command=tilt_down')">Tilt Down</button>
+    <div class="container">
+        <h1>Car Control</h1>
+
+        <!-- Video Stream -->
+        <div class="video-stream">
+            <img src="/stream.mjpg" alt="Live Stream">
+        </div>
+
+        <!-- Car Control Panel -->
+        <div class="control-panel">
+            <button class="control-button" id="forward" onmousedown="fetch('/?command=forward')" onmouseup="fetch('/?command=stop')">Forward</button>
+            <button class="control-button" id="backward" onmousedown="fetch('/?command=backward')" onmouseup="fetch('/?command=stop')">Backward</button>
+            <button class="control-button" id="left" onmousedown="fetch('/?command=left')" onmouseup="fetch('/?command=stop')">Left</button>
+            <button class="control-button" id="right" onmousedown="fetch('/?command=right')" onmouseup="fetch('/?command=stop')">Right</button>
+            <button class="control-button" id="stop" onclick="fetch('/?command=stop')">Stop</button>
+        </div>
+
+        <!-- Servo Control -->
+        <div class="servo-control">
+            <button class="control-button" onclick="fetch('/?command=pan_left')">Pan Left</button>
+            <button class="control-button" onclick="fetch('/?command=tilt_up')">Tilt Up</button>
+            <button class="control-button" onclick="fetch('/?command=pan_right')">Pan Right</button>
+            <button class="control-button" onclick="fetch('/?command=tilt_down')">Tilt Down</button>
+        </div>
+        <div class="servo-control">
+            <!-- Servo 1 (Up/Down) -->
+<button onclick="fetch('/?command=up1')">Servo 1 Up</button>
+<button onclick="fetch('/?command=down1')">Servo 1 Down</button>
+        </div>
+        <div class="servo-control">
+<!-- Servo 2 (Up/Down) -->
+<button onclick="fetch('/?command=up2')">Servo 2 Up</button>
+<button onclick="fetch('/?command=down2')">Servo 2 Down</button>
+        </div>
+        <!-- Pump, Buzzer, and Light Control -->
+        <div>
+            <button class="status-button off" id="pump" onclick=handleClick(1)>Pump OFF</button>
+            <button class="status-button off" id="buzzer" onclick=handleClick(2)>Buzzer OFF</button>
+            <button class="status-button off" id="light" onclick=handleClick(3)>Light OFF</button>
+
+<script>
+  let clickCounts = { 1: 0, 2: 0, 3: 0 };
+
+  // Button 1 functions
+  function button1FirstClick() {
+    console.log('Button 1 - First Click Action');
+    fetch('/?command=pump_on')
+      toggleStatus('pump')
+  }
+  function button1SecondClick() {
+    fetch('/?command=pump_off')
+      toggleStatus('pump')
+  }
+
+  // Button 2 functions
+  function button2FirstClick() {
+    fetch('/?command=buzzer_on')
+      toggleStatus('buzzer')
+  }
+  function button2SecondClick() {
+    fetch('/?command=buzzer_off')
+      toggleStatus('buzzer')
+  }
+
+  // Button 3 functions
+  function button3FirstClick() {
+    fetch('/?command=light_on')
+      toggleStatus('light')
+  }
+  function button3SecondClick() {
+   fetch('/?command=light_off')
+      toggleStatus('light')
+  }
+
+  // Handle clicks
+  function handleClick(buttonNumber) {
+    clickCounts[buttonNumber]++;
+
+    if (clickCounts[buttonNumber] === 1) {
+      if (buttonNumber === 1) button1FirstClick();
+      else if (buttonNumber === 2) button2FirstClick();
+      else if (buttonNumber === 3) button3FirstClick();
+    } else if (clickCounts[buttonNumber] === 2) {
+      if (buttonNumber === 1) button1SecondClick();
+      else if (buttonNumber === 2) button2SecondClick();
+      else if (buttonNumber === 3) button3SecondClick();
+      clickCounts[buttonNumber] = 0;
+    }
+  }
+</script>
+
+        </div>
+ <div class="sensor-data">
+<script>
+function fetchMoisture() {
+    fetch('/?command=moisture')
+        .then(response => response.json())
+        .then(data => {
+            document.getElementById("moisture").innerText = data.moisture;
+        });
+}
+setInterval(fetchMoisture, 2000);
+</script>
+            <p>Soil Moisture: <span id="moisture">--</span></p>
+            <p>Temperature: <span id="temp">--</span> °C</p>
+            <p>Humidity: <span id="humidity">--</span> %</p>
+        </div>
+
+    </div>
+
+    <script>
+        function toggleStatus(device) {
+            const button = document.getElementById(device);
+            const isOn = button.classList.contains('on');
+            const newStatus = isOn ? 'off' : 'on';
+            button.classList.remove(isOn ? 'on' : 'off');
+            button.classList.add(newStatus);
+            button.textContent = `${device.charAt(0).toUpperCase() + device.slice(1)} ${newStatus.toUpperCase()}`;
+
+            // Send status change to server (for pump, buzzer, light)
+            fetch(`/?${device}=${newStatus}`);
+        }
+    </script>
 </body>
 </html>
+
 """
 
 class StreamingOutput(io.BufferedIOBase):
@@ -123,16 +401,25 @@ class RequestHandler(server.BaseHTTPRequestHandler):
                     self.wfile.write(b'\r\n')
             except:
                 pass
+        elif self.path.startswith('/?command=moisture'):
+            moisture_value = read_soil_moisture_digital()  # Change to _digital() if using a digital sensor
+            response = {"moisture": moisture_value}
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(str(response).encode())
         elif self.path.startswith('/?command='):
             command = self.path.split('=')[-1]
             if command == 'forward': 
                 motors_forward()
             elif command == 'backward': 
                 motors_backward()
+            elif command == 'left':
+                motors_left()
+            elif command == 'right':
+                motors_right()
             elif command == 'stop': 
                 motors_stop()
-            elif 'speed' in command:
-                set_speed(int(self.path.split('value=')[-1]))
             elif command == 'pan_left' and pan_left_count < 2: 
                 move_servo(servo_pan, 70)
                 pan_left_count += 1
@@ -145,6 +432,27 @@ class RequestHandler(server.BaseHTTPRequestHandler):
             elif command == 'tilt_down' and tilt_down_count < 3: 
                 move_servo(servo_tilt, 120)
                 tilt_down_count += 1
+            elif command == 'up1':
+                move_servo(servo_up1, 90)  # Adjust angle as needed
+            elif command == 'down1':
+                move_servo(servo_up1, 0)   # Move back to original position
+            elif command == 'up2':
+                move_servo(servo_up2, 90)
+            elif command == 'down2':
+                move_servo(servo_up2, 0)
+            elif command == 'pump_on': 
+                GPIO.output(27, GPIO.HIGH)
+            elif command == 'pump_off': 
+                GPIO.output(27, GPIO.LOW)
+            elif command == 'buzzer_on': 
+                GPIO.output(RELAY_BUZZER, GPIO.HIGH)
+            elif command == 'buzzer_off': 
+                GPIO.output(RELAY_BUZZER, GPIO.LOW)
+            elif command == 'light_on': 
+                GPIO.output(RELAY_LIGHT, GPIO.HIGH)
+            elif command == 'light_off': 
+                GPIO.output(RELAY_LIGHT, GPIO.LOW)
+
 	    # If tilt up count is 3 , disable tilt up until tilt down is pressed
             if tilt_up_count == 3 and command == 'tilt_up':
                 self.send_response(403)
@@ -198,7 +506,7 @@ except KeyboardInterrupt:
     pass
 finally:
     picam2.stop_recording()
-    for pwm in [pwm_a, pwm_b, pwm_a2, pwm_b2]:
+    for pwm in [pwm_a, pwm_b]:
         pwm.stop()
     servo_pan.stop()
     servo_tilt.stop()
