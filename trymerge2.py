@@ -24,10 +24,10 @@ RELAY_BUZZER = 16
 RELAY_LIGHT = 26
 # DHT Sensor
 DHT_SENSOR = Adafruit_DHT.DHT22
-DHT_PIN = 7
+DHT_PIN = 4
 GPIO.setmode(GPIO.BCM)
 #soil moist
-SOIL_MOIST = 4
+SOIL_MOIST = 7
 # Setup for motors
 for pin in [IN1, IN2, ENA, IN3, IN4, ENB]:
     GPIO.setup(pin, GPIO.OUT)
@@ -68,9 +68,13 @@ def read_soil_moisture_digital():
     return "Dry" if GPIO.input(SOIL_MOIST) else "Moist"
 
 def motors_left():
+    GPIO.output([IN1,IN3],GPIO.HIGH)
+    GPIO.output([IN2,IN4],GPIO.LOW)
     pwm_a.ChangeDutyCycle(50)  # Reduce left motor speed
     pwm_b.ChangeDutyCycle(100)
 def motors_right():
+    GPIO.output([IN1,IN3],GPIO.HIGH)
+    GPIO.output([IN2,IN4],GPIO.LOW)
     pwm_a.ChangeDutyCycle(100)  # Keep left motor at full speed
     pwm_b.ChangeDutyCycle(50)  # Red
 def motors_forward():
@@ -78,12 +82,21 @@ def motors_forward():
     pwm_b.ChangeDutyCycle(100)
     GPIO.output([IN1, IN3], GPIO.HIGH)
     GPIO.output([IN2, IN4], GPIO.LOW)
-
+def motors_backright():
+    GPIO.output([IN1,IN3],GPIO.LOW)
+    GPIO.output([IN2,IN4],GPIO.HIGH)
+    pwm_a.ChangeDutyCycle(100)
+    pwm_b.ChangeDutyCycle(50)
+def motors_backleft():
+    GPIO.output([IN1,IN3],GPIO.LOW)
+    GPIO.output([IN2,IN4],GPIO.HIGH)
+    pwm_a.ChangeDutyCycle(50)
+    pwm_b.ChangeDutyCycle(100)
 def motors_backward():
     GPIO.output([IN1, IN3], GPIO.LOW)
     GPIO.output([IN2, IN4], GPIO.HIGH)
-    pwm_a.ChangeDutyCycle(0)
-    pwm_b.ChangeDutyCycle(0)
+    pwm_a.ChangeDutyCycle(100)
+    pwm_b.ChangeDutyCycle(100)
 def motors_stop():
     GPIO.output([IN1, IN2, IN3, IN4], GPIO.LOW)
 
@@ -262,10 +275,12 @@ PAGE = """
 
         <!-- Car Control Panel -->
         <div class="control-panel">
-            <button class="control-button" id="forward" onmousedown="fetch('/?command=forward')" onmouseup="fetch('/?command=stop')">Forward</button>
-            <button class="control-button" id="backward" onmousedown="fetch('/?command=backward')" onmouseup="fetch('/?command=stop')">Backward</button>
-            <button class="control-button" id="left" onmousedown="fetch('/?command=left')" onmouseup="fetch('/?command=stop')">Left</button>
-            <button class="control-button" id="right" onmousedown="fetch('/?command=right')" onmouseup="fetch('/?command=stop')">Right</button>
+            <button class="control-button" id="forward" onclick="fetch('/?command=forward')">Forward</button>
+            <button class="control-button" id="backward" onclick="fetch('/?command=backward')">Backward</button>
+            <button class="control-button" id="left" onclick="fetch('/?command=left')">Left</button>
+            <button class="control-button" id="right" onclick="fetch('/?command=right')">Right</button>
+            <button class="control-button" id="backwardleft" onclick="fetch('/?command=backwardleft')">Back Left</button>
+            <button class="control-button" id="backwardright" onclick="fetch('/?command=backwardright')">Back Right</button>
             <button class="control-button" id="stop" onclick="fetch('/?command=stop')">Stop</button>
         </div>
 
@@ -278,13 +293,13 @@ PAGE = """
         </div>
         <div class="servo-control">
             <!-- Servo 1 (Up/Down) -->
-<button onclick="fetch('/?command=up1')">Servo 1 Up</button>
-<button onclick="fetch('/?command=down1')">Servo 1 Down</button>
+<button onclick="fetch('/?command=up1')">Seed Lock</button>
+<button onclick="fetch('/?command=down1')">Seed Open</button>
         </div>
         <div class="servo-control">
 <!-- Servo 2 (Up/Down) -->
-<button onclick="fetch('/?command=up2')">Servo 2 Up</button>
-<button onclick="fetch('/?command=down2')">Servo 2 Down</button>
+<button onclick="fetch('/?command=down2')">Soil Moisture UP</button>
+<button onclick="fetch('/?command=up2')">Soil Moisture DOWN</button>
         </div>
         <!-- Pump, Buzzer, and Light Control -->
         <div>
@@ -310,10 +325,10 @@ PAGE = """
   function button2FirstClick() {
     fetch('/?command=buzzer_on')
       toggleStatus('buzzer')
-  }
-  function button2SecondClick() {
-    fetch('/?command=buzzer_off')
-      toggleStatus('buzzer')
+         setTimeout(() => {
+        fetch('/?command=buzzer_off');
+        toggleStatus('buzzer');
+    }, 500);
   }
 
   // Button 3 functions
@@ -336,7 +351,7 @@ PAGE = """
       else if (buttonNumber === 3) button3FirstClick();
     } else if (clickCounts[buttonNumber] === 2) {
       if (buttonNumber === 1) button1SecondClick();
-      else if (buttonNumber === 2) button2SecondClick();
+      else if (buttonNumber === 2) button2FirstClick();
       else if (buttonNumber === 3) button3SecondClick();
       clickCounts[buttonNumber] = 0;
     }
@@ -358,11 +373,11 @@ function fetchSensorData() {
 }
 
 // Fetch data every 2 seconds
-setInterval(fetchSensorData, 2000);
+setInterval(fetchSensorData, 5000);
 </script>
             <p>Soil Moisture: <span id="moisture">--</span></p>
-            <p>Temperature: <span id="temp">--</span> °C</p>
-            <p>Humidity: <span id="humidity">--</span> %</p>
+            <p>Temperature: <span id="temp">--</span> </p>
+            <p>Humidity: <span id="humidity">--</span> </p>
         </div>
 
     </div>
@@ -444,6 +459,10 @@ class RequestHandler(server.BaseHTTPRequestHandler):
                 motors_forward()
             elif command == 'backward': 
                 motors_backward()
+            elif command == 'backwardleft':
+                motors_backleft()
+            elif command == 'backwardright':
+                motors_backright()
             elif command == 'left':
                 motors_left()
             elif command == 'right':
@@ -451,10 +470,10 @@ class RequestHandler(server.BaseHTTPRequestHandler):
             elif command == 'stop': 
                 motors_stop()
             elif command == 'pan_left' and pan_left_count < 2: 
-                move_servo(servo_pan, 70)
+                move_servo(servo_pan, 95)
                 pan_left_count += 1
             elif command == 'pan_right' and pan_right_count < 2: 
-                move_servo(servo_pan, 95)
+                move_servo(servo_pan, 70)
                 pan_right_count += 1
             elif command == 'tilt_up' and tilt_up_count < 3: 
                 move_servo(servo_tilt, 45)
