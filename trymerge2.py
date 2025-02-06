@@ -11,6 +11,8 @@ from picamera2.outputs import FileOutput
 import time
 import Adafruit_DHT
 
+file_path = "/home/hossam/proj2/dht_data.txt"
+
 # GPIO motor drivers
 # driver 1
 IN1, IN2, ENA = 17, 18, 22
@@ -60,12 +62,6 @@ tilt_up_count = 0
 tilt_down_count = 0
 pan_left_count = 0
 pan_right_count = 0
-def read_dht_sensor():
-    humidity, temperature = Adafruit_DHT.read(DHT_SENSOR, DHT_PIN)
-    if humidity is not None and temperature is not None:
-        return temperature, humidity
-    else:
-        return None, None
 
 # Read digital soil moisture sensor (returns "Moist" or "Dry")
 def read_soil_moisture_digital():
@@ -100,6 +96,28 @@ def move_servo(servo, angle):
     servo.ChangeDutyCycle(duty)
     time.sleep(0.3)
     servo.ChangeDutyCycle(0)
+# Store the last successful readings
+last_temperature = None
+last_humidity = None
+
+def read_dht_sensor():
+    global last_temperature, last_humidity  # Use stored values
+
+    try:
+        with open(file_path, "r") as f:
+            data = f.read().strip()
+
+        if "Error" in data:
+            print("DHT Sensor Error:", data)
+            return last_temperature, last_humidity  # Return last known good values
+        else:
+            temp, hum = data.split(",")
+            last_temperature, last_humidity = float(temp), float(hum)  # Update stored values
+            return last_temperature, last_humidity  # Return latest valid readings
+
+    except Exception as e:
+        print(f"Error reading sensor file: {e}")
+        return last_temperature, last_humidity  # Return last known good values
 
 PAGE = """
 <!DOCTYPE html>
@@ -328,14 +346,19 @@ PAGE = """
         </div>
  <div class="sensor-data">
 <script>
-function fetchMoisture() {
-    fetch('/?command=moisture')
+function fetchSensorData() {
+    fetch('/?command=sensor_data')
         .then(response => response.json())
         .then(data => {
             document.getElementById("moisture").innerText = data.moisture;
-        });
+            document.getElementById("temp").innerText = data.temperature;
+            document.getElementById("humidity").innerText = data.humidity;
+        })
+        .catch(error => console.error('Error fetching sensor data:', error));
 }
-setInterval(fetchMoisture, 2000);
+
+// Fetch data every 2 seconds
+setInterval(fetchSensorData, 2000);
 </script>
             <p>Soil Moisture: <span id="moisture">--</span></p>
             <p>Temperature: <span id="temp">--</span> °C</p>
@@ -401,13 +424,20 @@ class RequestHandler(server.BaseHTTPRequestHandler):
                     self.wfile.write(b'\r\n')
             except:
                 pass
-        elif self.path.startswith('/?command=moisture'):
-            moisture_value = read_soil_moisture_digital()  # Change to _digital() if using a digital sensor
-            response = {"moisture": moisture_value}
+        elif self.path.startswith('/?command=sensor_data'):
+            temperature, humidity = read_dht_sensor()
+            moisture_value = read_soil_moisture_digital()
+
+            response = {
+        "temperature": f"{temperature:.1f}°C" if temperature else "--",
+        "humidity": f"{humidity:.1f}%" if humidity else "--",
+        "moisture": moisture_value
+    }
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
             self.end_headers()
-            self.wfile.write(str(response).encode())
+            self.wfile.write(str(response).replace("'", '"').encode())  # Ensure proper JSON format
+
         elif self.path.startswith('/?command='):
             command = self.path.split('=')[-1]
             if command == 'forward': 
